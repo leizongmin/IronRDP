@@ -2533,10 +2533,13 @@ dependencies = [
  "ironrdp-error",
  "ironrdp-pdu",
  "ironrdp-svc",
+ "md5",
+ "num-bigint",
  "picky",
  "picky-asn1-der",
  "picky-asn1-x509",
  "rand 0.9.2",
+ "sha1 0.10.6",
  "sspi",
  "tracing",
  "url",
@@ -3287,6 +3290,12 @@ checksum = "7da5ac363534dce5fabf69949225e174fbf111a498bf0ff794c8ea1fba9f3dda"
 dependencies = [
  "digest 0.10.7",
 ]
+
+[[package]]
+name = "md5"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "490cc448043f947bae3cbee9c203358d62dbee0db12107a74be5c30ccfd09771"
 
 [[package]]
 name = "memchr"

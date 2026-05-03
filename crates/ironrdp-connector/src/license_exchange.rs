@@ -129,6 +129,9 @@ impl Sequence for LicenseExchangeSequence {
 
             LicenseExchangeState::NewLicenseRequest => {
                 let send_data_indication_ctx = legacy::decode_send_data_indication(input)?;
+                eprintln!("[license] user_data_len={} first16={:02x?}",
+                    send_data_indication_ctx.user_data.len(),
+                    &send_data_indication_ctx.user_data[..16.min(send_data_indication_ctx.user_data.len())]);
                 let license_pdu = send_data_indication_ctx
                     .decode_user_data::<LicensePdu>()
                     .with_context("decode during LicenseExchangeState::NewLicenseRequest")?;

@@ -8,7 +8,7 @@ use ironrdp_graphics::rdp6::BitmapStreamDecoder;
 use ironrdp_graphics::rle::RlePixelFormat;
 use ironrdp_pdu::bitmap::BitmapUpdateData;
 use ironrdp_pdu::codecs::rfx::FrameAcknowledgePdu;
-use ironrdp_pdu::fast_path::{FastPathHeader, FastPathUpdate, FastPathUpdatePdu, Fragmentation};
+use ironrdp_pdu::fast_path::{EncryptionFlags, FastPathHeader, FastPathUpdate, FastPathUpdatePdu, Fragmentation};
 use ironrdp_pdu::geometry::{InclusiveRectangle, Rectangle as _};
 use ironrdp_pdu::pointer::PointerUpdateData;
 use ironrdp_pdu::rdp::capability_sets::{CODEC_ID_NONE, CODEC_ID_REMOTEFX, CodecId};
@@ -75,10 +75,35 @@ impl Processor {
         let header = decode_cursor::<FastPathHeader>(&mut input).map_err(SessionError::decode)?;
         trace!(fast_path_header = ?header, "Received Fast-Path packet");
 
+        // OmniTerm: handle standard RDP security (RC4 encryption) on fast-path PDUs.
+        // If the ENCRYPTED flag is set, the payload has a data_signature (8 bytes) +
+        // RC4-encrypted data. We need to decrypt before parsing updates.
+        let decrypted_payload;
+        let payload_data: &[u8] = if header.flags.contains(EncryptionFlags::ENCRYPTED) {
+            const MAC_SIZE: usize = 8;
+            let remaining = input.remaining();
+            if remaining.len() < MAC_SIZE {
+                return Err(reason_err!("fast_path", "payload too short for MAC"));
+            }
+            let ciphertext = &remaining[MAC_SIZE..];
+            decrypted_payload = ironrdp_connector::legacy::decrypt_with_rc4(ciphertext);
+            match decrypted_payload {
+                Some(ref plain) => plain.as_slice(),
+                None => {
+                    warn!("Fast-path SEC_ENCRYPT set but no RC4 decryptor available");
+                    input.remaining()
+                }
+            }
+        } else {
+            input.remaining()
+        };
+
+        let mut payload_cursor = ReadCursor::new(payload_data);
+
         // A single FastPath output PDU can contain multiple updates.
         // Loop over all updates within the PDU payload.
-        while !input.is_empty() {
-            let update_result = self.process_single_update(&mut input, image, output)?;
+        while !payload_cursor.is_empty() {
+            let update_result = self.process_single_update(&mut payload_cursor, image, output)?;
             processor_updates.extend(update_result);
         }
 

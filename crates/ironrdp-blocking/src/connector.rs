@@ -211,11 +211,25 @@ where
             .read_by_hint(next_pdu_hint)
             .map_err(|e| ironrdp_connector::custom_err!("read frame by hint", e))?;
 
+        // OmniTerm debug: log raw PDU bytes to diagnose standard security issues
+        eprintln!("[ironrdp] state={} pdu_len={}", connector.state.name(), pdu.len());
+        let hex_preview: Vec<String> = pdu.iter().take(32).map(|b| format!("{b:02x}")).collect();
+        eprintln!("[ironrdp] pdu_hex={}", hex_preview.join(""));
+
         trace!(length = pdu.len(), "PDU received");
 
-        connector.step(&pdu, buf)?
+        connector.step(&pdu, buf).map_err(|e| {
+            eprintln!("[ironrdp] STEP FAILED in state={}: {e:#?}", connector.state.name());
+            e
+        })?
     } else {
-        connector.step_no_input(buf)?
+        // OmniTerm debug: log state before step_no_input
+        eprintln!("[ironrdp] state={} step_no_input", connector.state.name());
+
+        connector.step_no_input(buf).map_err(|e| {
+            eprintln!("[ironrdp] STEP_NO_INPUT FAILED in state={}: {e:#?}", connector.state.name());
+            e
+        })?
     };
 
     if let Some(response_len) = written.size() {

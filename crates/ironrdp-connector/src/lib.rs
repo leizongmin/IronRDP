@@ -12,6 +12,7 @@ mod connection_finalization;
 pub mod credssp;
 mod license_exchange;
 mod server_name;
+pub mod standard_security;
 
 use core::any::Any;
 use core::fmt;

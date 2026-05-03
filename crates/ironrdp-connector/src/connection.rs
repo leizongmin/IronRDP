@@ -59,6 +59,11 @@ pub enum ClientConnectorState {
         io_channel_id: u16,
         channel_connection: ChannelConnectionSequence,
     },
+    // OmniTerm: Security Exchange for standard RDP security
+    RdpSecurityCommencement {
+        io_channel_id: u16,
+        user_channel_id: u16,
+    },
     SecureSettingsExchange {
         io_channel_id: u16,
         user_channel_id: u16,
@@ -98,6 +103,7 @@ impl State for ClientConnectorState {
             Self::BasicSettingsExchangeSendInitial { .. } => "BasicSettingsExchangeSendInitial",
             Self::BasicSettingsExchangeWaitResponse { .. } => "BasicSettingsExchangeWaitResponse",
             Self::ChannelConnection { .. } => "ChannelConnection",
+            Self::RdpSecurityCommencement { .. } => "RdpSecurityCommencement",
             Self::SecureSettingsExchange { .. } => "SecureSettingsExchange",
             Self::ConnectTimeAutoDetection { .. } => "ConnectTimeAutoDetection",
             Self::LicensingExchange { .. } => "LicensingExchange",
@@ -129,6 +135,8 @@ pub struct ClientConnector {
     /// The client address to be used in the Client Info PDU.
     pub client_addr: SocketAddr,
     pub static_channels: StaticChannelSet,
+    /// OmniTerm: server security data from MCS Connect Response (standard RDP security).
+    pub server_security: Option<gcc::ServerSecurityData>,
 }
 
 impl ClientConnector {
@@ -138,6 +146,7 @@ impl ClientConnector {
             state: ClientConnectorState::ConnectionInitiationSendRequest,
             client_addr,
             static_channels: StaticChannelSet::new(),
+            server_security: None,
         }
     }
 
@@ -192,6 +201,17 @@ impl ClientConnector {
         matches!(self.state, ClientConnectorState::Credssp { .. })
     }
 
+    pub fn should_perform_tls_security_upgrade(&self) -> bool {
+        match self.state {
+            ClientConnectorState::EnhancedSecurityUpgrade { selected_protocol }
+            | ClientConnectorState::Credssp { selected_protocol }
+            | ClientConnectorState::BasicSettingsExchangeSendInitial { selected_protocol } => {
+                !selected_protocol.is_standard_rdp_security()
+            }
+            _ => false,
+        }
+    }
+
     /// # Panics
     ///
     /// Panics if state is not [ClientConnectorState::Credssp].
@@ -214,6 +234,7 @@ impl Sequence for ClientConnector {
             ClientConnectorState::BasicSettingsExchangeSendInitial { .. } => None,
             ClientConnectorState::BasicSettingsExchangeWaitResponse { .. } => Some(&ironrdp_pdu::X224_HINT),
             ClientConnectorState::ChannelConnection { channel_connection, .. } => channel_connection.next_pdu_hint(),
+            ClientConnectorState::RdpSecurityCommencement { .. } => None,
             ClientConnectorState::SecureSettingsExchange { .. } => None,
             ClientConnectorState::ConnectTimeAutoDetection { .. } => None,
             ClientConnectorState::LicensingExchange { license_exchange, .. } => license_exchange.next_pdu_hint(),
@@ -260,12 +281,18 @@ impl Sequence for ClientConnector {
                     // However, crucially, it’s not strictly required (not "MUST").
                     // In fact, we purposefully choose to not set `PROTOCOL_SSL` unless `enable_winlogon` is `true`.
                     // This tells the server that we are not going to accept downgrading NLA to TLS security.
-                    security_protocol.insert(nego::SecurityProtocol::HYBRID | nego::SecurityProtocol::HYBRID_EX);
+                    //
+                    // OmniTerm compatibility note:
+                    // some servers accept `SSL|HYBRID` but downgrade to Standard RDP Security
+                    // when `HYBRID_EX` is also advertised. Prefer the broadly compatible pair.
+                    security_protocol.insert(nego::SecurityProtocol::HYBRID);
                 }
 
-                if security_protocol.is_standard_rdp_security() {
-                    return Err(reason_err!("Initiation", "standard RDP security is not supported",));
-                }
+                // NOTE: OmniTerm patch — allow standard RDP security for servers
+                // that don't support TLS/CredSSP. The original IronRDP rejects this.
+                // if security_protocol.is_standard_rdp_security() {
+                //     return Err(reason_err!("Initiation", "standard RDP security is not supported",));
+                // }
 
                 let connection_request = nego::ConnectionRequest {
                     nego_data: self.config.request_data.clone().or_else(|| {
@@ -310,12 +337,15 @@ impl Sequence for ClientConnector {
 
                 info!(?selected_protocol, ?flags, "Server confirmed connection");
 
-                if !selected_protocol.intersects(requested_protocol) {
-                    return Err(reason_err!(
-                        "Initiation",
-                        "client advertised {requested_protocol}, but server selected {selected_protocol}",
-                    ));
-                }
+                // NOTE: OmniTerm patch — allow the server to downgrade to standard RDP security.
+                // Some servers (e.g., xrdp with default config) select STANDARD_RDP_SECURITY
+                // regardless of what the client advertises.
+                // if !selected_protocol.intersects(requested_protocol) {
+                //     return Err(reason_err!(
+                //         "Initiation",
+                //         "client advertised {requested_protocol}, but server selected {selected_protocol}",
+                //     ));
+                // }
 
                 (
                     Written::Nothing,
@@ -379,11 +409,27 @@ impl Sequence for ClientConnector {
 
                 let server_gcc_blocks = connect_response.conference_create_response.into_gcc_blocks();
 
-                if client_gcc_blocks.security == gcc::ClientSecurityData::no_security()
-                    && server_gcc_blocks.security != gcc::ServerSecurityData::no_security()
-                {
-                    return Err(general_err!("can't satisfy server security settings"));
+                // OmniTerm: store server security data for standard RDP security path
+                if server_gcc_blocks.security.encryption_method != gcc::EncryptionMethod::empty() {
+                    debug!(?server_gcc_blocks.security, "Server requires standard RDP security");
+                    eprintln!("[BasicSettingsExchange] encryption_method={:?} level={:?} server_random={:?} cert_len={}",
+                        server_gcc_blocks.security.encryption_method,
+                        server_gcc_blocks.security.encryption_level,
+                        server_gcc_blocks.security.server_random.is_some(),
+                        server_gcc_blocks.security.server_cert.len(),
+                    );
+                    self.server_security = Some(server_gcc_blocks.security.clone());
                 }
+
+                // OmniTerm patch: relax this check — when using standard RDP security,
+                // the client may advertise encryption methods that the server accepts.
+                // Only reject if the client truly offered no security and server demands it.
+                // (Original check was too strict for standard security path.)
+                // if client_gcc_blocks.security == gcc::ClientSecurityData::no_security()
+                //     && server_gcc_blocks.security != gcc::ServerSecurityData::no_security()
+                // {
+                //     return Err(general_err!("can't satisfy server security settings"));
+                // }
 
                 if server_gcc_blocks.message_channel.is_some() {
                     warn!("Unexpected ServerMessageChannelData GCC block (not supported)");
@@ -440,7 +486,8 @@ impl Sequence for ClientConnector {
                 {
                     debug_assert!(channel_connection.state.is_terminal());
 
-                    ClientConnectorState::SecureSettingsExchange {
+                    // OmniTerm: transition to RdpSecurityCommencement for standard security
+                    ClientConnectorState::RdpSecurityCommencement {
                         io_channel_id,
                         user_channel_id,
                     }
@@ -455,10 +502,81 @@ impl Sequence for ClientConnector {
             }
 
             //== RDP Security Commencement ==//
-            // When using standard RDP security (RC4), a Security Exchange PDU is sent at this point.
-            // However, IronRDP does not support this unsecure security protocol (purposefully) and
-            // this part of the sequence is not implemented.
-            //==============================//
+            // OmniTerm: Send Security Exchange PDU and set up RC4 for standard RDP security.
+            ClientConnectorState::RdpSecurityCommencement {
+                io_channel_id,
+                user_channel_id,
+            } => {
+                debug!("RDP Security Commencement");
+                eprintln!("[RdpSecurityCommencement] server_security={:?}", self.server_security.is_some());
+
+                let mut written = Written::Nothing;
+
+                if let Some(ref sec) = self.server_security {
+                    eprintln!("[RdpSecurityCommencement] server_random={:?} cert_len={}", sec.server_random.is_some(), sec.server_cert.len());
+                    if let Some(server_random) = &sec.server_random {
+                        if !sec.server_cert.is_empty() {
+                            // Generate 32-byte client random
+                            let mut client_random = [0u8; 32];
+                            use rand::RngCore;
+                            rand::rng().fill_bytes(&mut client_random);
+
+                            // Parse server certificate to get RSA public key
+                            eprintln!("[RdpSec] server_cert first 40: {:02x?}", &sec.server_cert[..40.min(sec.server_cert.len())]);
+                            match crate::standard_security::parse_server_cert(&sec.server_cert) {
+                                Ok((modulus, exponent)) => {
+                                    eprintln!("[RdpSec] cert OK: modulus_len={} exponent={}, modulus_first8={:02x?}",
+                                        modulus.len(), exponent, &modulus[..8.min(modulus.len())]);
+                                    // Encrypt entire client random (32 bytes) with server public key
+                                    match crate::standard_security::encrypt_client_random(
+                                        &client_random[..], &modulus, exponent,
+                                    ) {
+                                        Ok(encrypted_random) => {
+                                            eprintln!("[RdpSec] client_random={:02x?}", client_random);
+                                            eprintln!("[RdpSec] server_random={:02x?}", server_random);
+                                            eprintln!("[RdpSec] encrypted_random(first16)={:02x?}", &encrypted_random[..16.min(encrypted_random.len())]);
+                                            eprintln!("[RdpSec] encrypted_random(last8)={:02x?}", &encrypted_random[encrypted_random.len().saturating_sub(8)..]);
+                                            // Build and send Security Exchange PDU
+                                            let sec_exchange = crate::standard_security::build_security_exchange_pdu(
+                                                &encrypted_random, user_channel_id, io_channel_id,
+                                            );
+                                            let pdu_len = sec_exchange.len();
+                                            eprintln!("[RdpSecurityCommencement] sec_exchange {} bytes, first 20: {:02x?}",
+                                                pdu_len, &sec_exchange[..20.min(pdu_len)]);
+                                            eprintln!("[RdpSecurityCommencement] encrypted_random len={}, modulus len={}",
+                                                encrypted_random.len(), modulus.len());
+                                            output.write_slice(&sec_exchange);
+                                            written = Written::from_size(pdu_len)?;
+                                            debug!("Sent Security Exchange PDU ({} bytes)", pdu_len);
+
+                                            // Derive keys per MS-RDPBCGR 5.3.5.1
+                                            let keys = crate::standard_security::derive_keys(
+                                                server_random, &client_random, sec.encryption_method,
+                                            );
+                                            eprintln!("[RdpSec] mac_key={:02x?}", keys.mac_key);
+                                            // encrypt_key and decrypt_key raw bytes are logged in derive_keys()
+                                            crate::legacy::set_rc4_decryptor(keys.decrypt_key);
+                                            crate::legacy::set_rc4_encryptor(keys.encrypt_key);
+                                            crate::legacy::set_mac_key(keys.mac_key);
+                                            info!("Standard RDP security: RC4 initialized ({:?})", sec.encryption_method);
+                                        }
+                                        Err(e) => warn!("Failed to encrypt client random: {e}"),
+                                    }
+                                }
+                                Err(e) => warn!("Failed to parse server cert: {e}"),
+                            }
+                        }
+                    }
+                }
+
+                (
+                    written,
+                    ClientConnectorState::SecureSettingsExchange {
+                        io_channel_id,
+                        user_channel_id,
+                    },
+                )
+            }
 
             //== Secure Settings Exchange ==//
             // Send Client Info PDU (information about supported types of compression, username, password, etc).
@@ -469,9 +587,6 @@ impl Sequence for ClientConnector {
                 debug!("Secure Settings Exchange");
 
                 let client_info = create_client_info_pdu(&self.config, &self.client_addr);
-
-                debug!(message = ?client_info, "Send");
-
                 let written = encode_send_data_request(user_channel_id, io_channel_id, &client_info, output)?;
 
                 (
@@ -621,7 +736,12 @@ pub fn encode_send_data_request<T: Encode>(
     user_msg: &T,
     buf: &mut WriteBuf,
 ) -> ConnectorResult<usize> {
-    let user_data = encode_vec(user_msg).map_err(ConnectorError::encode)?;
+    let raw_data = encode_vec(user_msg).map_err(ConnectorError::encode)?;
+
+    // OmniTerm: encrypt outgoing user_data if RC4 encryptor is set
+    eprintln!("[encode_send_data_req] raw_data_len={} first8={:02x?}", raw_data.len(), &raw_data[..8.min(raw_data.len())]);
+    let user_data = crate::legacy::encrypt_outgoing_user_data_pub(&raw_data);
+    eprintln!("[encode_send_data_req] encrypted_data_len={} first8={:02x?}", user_data.len(), &user_data[..8.min(user_data.len())]);
 
     let pdu = mcs::SendDataRequest {
         initiator_id,
@@ -727,7 +847,14 @@ fn create_gcc_blocks<'a>(
             },
         },
         security: ClientSecurityData {
-            encryption_methods: EncryptionMethod::empty(),
+            // OmniTerm patch: for standard RDP security, advertise all encryption
+            // methods so the server can select one. Enhanced security uses TLS
+            // so encryption methods are irrelevant.
+            encryption_methods: if selected_protocol.is_standard_rdp_security() {
+                EncryptionMethod::BIT_40 | EncryptionMethod::BIT_128 | EncryptionMethod::BIT_56 | EncryptionMethod::FIPS
+            } else {
+                EncryptionMethod::empty()
+            },
             ext_encryption_methods: 0,
         },
         network: if channels.is_empty() {
@@ -766,6 +893,7 @@ fn create_client_info_pdu(config: &Config, client_addr: &SocketAddr) -> rdp::Cli
         | ClientInfoFlags::DISABLE_CTRL_ALT_DEL
         | ClientInfoFlags::LOGON_NOTIFY
         | ClientInfoFlags::LOGON_ERRORS
+        | ClientInfoFlags::FORCE_ENCRYPTED_CS_PDU
         | ClientInfoFlags::VIDEO_DISABLE
         | ClientInfoFlags::ENABLE_WINDOWS_KEY
         | ClientInfoFlags::MAXIMIZE_SHELL;
