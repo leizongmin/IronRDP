@@ -836,7 +836,6 @@ impl DecodedImage {
         if format == self.pixel_format {
             rgb32
                 .chunks_exact(rectangle_width * SRC_COLOR_DEPTH)
-                .rev()
                 .enumerate()
                 .for_each(|(row_idx, row)| {
                     row.chunks_exact(SRC_COLOR_DEPTH)
@@ -851,7 +850,6 @@ impl DecodedImage {
             let [ri, gi, bi, ai] = self.pixel_format.channel_offsets();
             rgb32
                 .chunks_exact(rectangle_width * SRC_COLOR_DEPTH)
-                .rev()
                 .enumerate()
                 .try_for_each(|(row_idx, row)| {
                     row.chunks_exact(SRC_COLOR_DEPTH)

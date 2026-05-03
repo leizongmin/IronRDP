@@ -228,15 +228,37 @@ impl Processor {
                     // Compressed bitmaps at a color depth of 32 bpp are compressed using RDP 6.0
                     // Bitmap Compression and stored inside an RDP 6.0 Bitmap Compressed Stream
                     // structure ([MS-RDPEGDI] section 2.2.2.5.1).
-                    debug!("32 bpp compressed RDP6_BITMAP_STREAM");
+                    let data_width = usize::from(update.width);
+                    let rect_width = usize::from(update.rectangle.width());
 
                     match self.bitmap_stream_decoder.decode_bitmap_stream_to_rgb24(
                         update.bitmap_data,
                         &mut buf,
-                        usize::from(update.width),
+                        data_width,
                         usize::from(update.height),
                     ) {
-                        Ok(()) => image.apply_rgb24(&buf, &update.rectangle, true)?,
+                        Ok(()) => {
+                            if data_width != rect_width {
+                                // The decoder produced data_width columns, but apply_rgb24
+                                // uses rect_width for row chunking. Re-chunk the decoded
+                                // buffer to match rect_width to avoid diagonal tearing.
+                                let height = usize::from(update.height);
+                                let src_stride = data_width * 3;
+                                let dst_stride = rect_width * 3;
+                                if src_stride > dst_stride && buf.len() == height * src_stride {
+                                    let mut trimmed = Vec::with_capacity(height * dst_stride);
+                                    for row in 0..height {
+                                        let start = row * src_stride;
+                                        trimmed.extend_from_slice(&buf[start..start + dst_stride]);
+                                    }
+                                    image.apply_rgb24(&trimmed, &update.rectangle, true)?
+                                } else {
+                                    image.apply_rgb24(&buf, &update.rectangle, true)?
+                                }
+                            } else {
+                                image.apply_rgb24(&buf, &update.rectangle, true)?
+                            }
+                        }
                         Err(err) => {
                             warn!("Invalid RDP6_BITMAP_STREAM: {err}");
                             update.rectangle.clone()
