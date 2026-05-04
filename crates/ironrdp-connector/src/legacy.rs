@@ -270,10 +270,6 @@ pub fn decode_share_control(ctx: SendDataIndicationCtx<'_>) -> ConnectorResult<S
         let flags_hi = u16::from_le_bytes([ctx.user_data[2], ctx.user_data[3]]);
         let flags = BasicSecurityHeaderFlags::from_bits_retain(flags_raw);
 
-        eprintln!("[decode_share_control] ud_len={} flags=0x{:04x} flags_hi=0x{:04x} first8={:02x?}",
-            ctx.user_data.len(), flags_raw, flags_hi,
-            &ctx.user_data[..8.min(ctx.user_data.len())]);
-
         if flags_hi == 0 && BasicSecurityHeaderFlags::from_bits(flags_raw).is_some() {
             let encrypted = flags.contains(BasicSecurityHeaderFlags::ENCRYPT);
             if encrypted {
@@ -286,8 +282,6 @@ pub fn decode_share_control(ctx: SendDataIndicationCtx<'_>) -> ConnectorResult<S
                 }
                 let ciphertext = &ctx.user_data[BASIC_SECURITY_HEADER_SIZE + MAC_SIZE..];
 
-                eprintln!("[decode_share_control] SEC_ENCRYPT set, ciphertext_len={}", ciphertext.len());
-
                 // Use thread-local RC4 decryptor
                 decrypted = RC4_DECRYPTOR.with(|cell| {
                     let mut borrow = cell.borrow_mut();
@@ -299,13 +293,9 @@ pub fn decode_share_control(ctx: SendDataIndicationCtx<'_>) -> ConnectorResult<S
                 });
 
                 match decrypted {
-                    Some(ref plain) => {
-                        eprintln!("[decode_share_control] decrypted_len={}, first16={:02x?}",
-                            plain.len(), &plain[..16.min(plain.len())]);
-                        plain.as_slice()
-                    }
+                    Some(ref plain) => plain.as_slice(),
                     None => {
-                        eprintln!("[ironrdp] WARNING: SEC_ENCRYPT set but no RC4 decryptor available");
+                        tracing::warn!("SEC_ENCRYPT set but no RC4 decryptor available");
                         &ctx.user_data[BASIC_SECURITY_HEADER_SIZE + MAC_SIZE..]
                     }
                 }
