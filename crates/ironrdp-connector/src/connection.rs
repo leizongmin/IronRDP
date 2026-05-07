@@ -317,7 +317,7 @@ impl Sequence for ClientConnector {
                     },
                 )
             }
-            ClientConnectorState::ConnectionInitiationWaitConfirm { requested_protocol } => {
+            ClientConnectorState::ConnectionInitiationWaitConfirm { requested_protocol: _requested_protocol } => {
                 let connection_confirm = decode::<X224<nego::ConnectionConfirm>>(input)
                     .map_err(ConnectorError::decode)
                     .map(|p| p.0)?;
@@ -405,7 +405,7 @@ impl Sequence for ClientConnector {
 
                 debug!(message = ?connect_response, "Received");
 
-                let client_gcc_blocks = connect_initial.conference_create_request.gcc_blocks();
+                let _client_gcc_blocks = connect_initial.conference_create_request.gcc_blocks();
 
                 let server_gcc_blocks = connect_response.conference_create_response.into_gcc_blocks();
 
@@ -754,7 +754,6 @@ pub fn encode_send_data_request<T: Encode>(
     Ok(written)
 }
 
-#[expect(single_use_lifetimes)] // anonymous lifetimes in `impl Trait` are unstable
 fn create_gcc_blocks<'a>(
     config: &Config,
     selected_protocol: nego::SecurityProtocol,
