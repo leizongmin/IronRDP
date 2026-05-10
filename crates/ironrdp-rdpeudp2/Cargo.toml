@@ -1,0 +1,26 @@
+[package]
+name = "ironrdp-rdpeudp2"
+version = "0.1.0"
+description = "RDPEUDP2 (reliable UDP transport) PDU encode/decode for IronRDP"
+edition.workspace = true
+rust-version = "1.89"
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+doctest = false
+
+[features]
+default = ["std"]
+std = ["alloc"]
+alloc = []
+
+[dependencies]
+bitflags = "2.11"
+
+[lints]
+workspace = true
