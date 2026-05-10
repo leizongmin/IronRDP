@@ -754,10 +754,10 @@ pub fn encode_send_data_request<T: Encode>(
     Ok(written)
 }
 
-fn create_gcc_blocks<'a>(
+fn create_gcc_blocks(
     config: &Config,
     selected_protocol: nego::SecurityProtocol,
-    static_channels: impl Iterator<Item = &'a StaticVirtualChannel>,
+    static_channels: impl Iterator<Item = &StaticVirtualChannel>,
 ) -> ConnectorResult<gcc::ClientGccBlocks> {
     use ironrdp_pdu::gcc::{
         ClientCoreData, ClientCoreOptionalData, ClientEarlyCapabilityFlags, ClientGccBlocks, ClientNetworkData,
