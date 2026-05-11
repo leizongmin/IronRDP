@@ -89,8 +89,6 @@ where
 
         Box::pin(async {
             self.inner.write_all(buf).await?;
-            self.inner.flush().await?;
-
             Ok(())
         })
     }
@@ -152,8 +150,6 @@ where
 
         Box::pin(async {
             self.inner.write_all(buf).await?;
-            self.inner.flush().await?;
-
             Ok(())
         })
     }
@@ -215,8 +211,6 @@ where
 
         Box::pin(async {
             self.inner.write_all(buf).await?;
-            self.inner.flush().await?;
-
             Ok(())
         })
     }
