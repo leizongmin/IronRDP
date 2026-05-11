@@ -795,7 +795,7 @@ fn create_gcc_blocks<'a>(
 
     Ok(ClientGccBlocks {
         core: ClientCoreData {
-            version: RdpVersion::V5_PLUS,
+            version: RdpVersion::V10_8,
             desktop_width: config.desktop_size.width,
             desktop_height: config.desktop_size.height,
             color_depth: ColorDepth::Bpp8, // ignored because we use the optional core data below
@@ -830,8 +830,18 @@ fn create_gcc_blocks<'a>(
                 dig_product_id: Some(config.dig_product_id.clone()),
                 connection_type: Some(ConnectionType::Lan),
                 server_selected_protocol: Some(selected_protocol),
-                desktop_physical_width: Some(0),  // 0 per FreeRDP
-                desktop_physical_height: Some(0), // 0 per FreeRDP
+                // Physical monitor dimensions in mm, derived from logical viewport at 96 DPI.
+                // Windows uses (desktop_pixels / physical_mm * 25.4) to compute DPI and set
+                // display scaling. With correct physical size, the server auto-selects the
+                // appropriate scale factor for the desktop resolution.
+                desktop_physical_width: {
+                    let logical_w = config.desktop_size.width as f64 / (config.desktop_scale_factor as f64 / 100.0).max(1.0);
+                    Some((logical_w / 96.0 * 25.4).round() as u32)
+                },
+                desktop_physical_height: {
+                    let logical_h = config.desktop_size.height as f64 / (config.desktop_scale_factor as f64 / 100.0).max(1.0);
+                    Some((logical_h / 96.0 * 25.4).round() as u32)
+                },
                 desktop_orientation: if config.desktop_size.width > config.desktop_size.height {
                     Some(MonitorOrientation::Landscape.as_u16())
                 } else {

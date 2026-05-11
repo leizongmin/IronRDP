@@ -353,12 +353,12 @@ impl DecodedImage {
 
         // Cut right side if required
         let right = if right_virtual >= i32::from(self.width - 1) {
-            if draw_x + 1 >= self.width {
+            if draw_x as u32 + 1 >= self.width as u32 {
                 // Pointer is completely out of bounds horizontally
                 self.pointer_visible_on_screen = false;
                 return;
             } else {
-                self.width - (draw_x + 1)
+                (self.width as u32 - (draw_x as u32 + 1)) as u16
             }
         } else {
             pointer.width - 1
@@ -366,12 +366,12 @@ impl DecodedImage {
 
         // Cut bottom side if required
         let bottom = if bottom_virtual >= i32::from(self.height - 1) {
-            if (draw_y + 1) >= self.height {
+            if draw_y as u32 + 1 >= self.height as u32 {
                 // Pointer is completely out of bounds vertically
                 self.pointer_visible_on_screen = false;
                 return;
             } else {
-                self.height - (draw_y + 1)
+                (self.height as u32 - (draw_y as u32 + 1)) as u16
             }
         } else {
             pointer.height - 1
