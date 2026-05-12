@@ -332,6 +332,11 @@ impl DecodedImage {
             _ => return,
         };
 
+        if pointer.width == 0 || pointer.height == 0 {
+            self.pointer_visible_on_screen = false;
+            return;
+        }
+
         let left_virtual = i32::from(x) - i32::from(pointer.hotspot_x);
         let top_virtual = i32::from(y) - i32::from(pointer.hotspot_y);
         let right_virtual = left_virtual + i32::from(pointer.width) - 1;
@@ -876,5 +881,23 @@ impl DecodedImage {
         let update_rectangle = self.pointer_rendering_end(pointer_rendering_state)?;
 
         Ok(update_rectangle)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invisible_pointer_does_not_panic_on_move() {
+        let mut image = DecodedImage::new(PixelFormat::RgbA32, 1200, 724);
+
+        image
+            .update_pointer(Arc::new(DecodedPointer::new_invisible()))
+            .expect("updating invisible pointer should succeed");
+
+        image
+            .move_pointer(1199, 723)
+            .expect("moving invisible pointer should not panic");
     }
 }
