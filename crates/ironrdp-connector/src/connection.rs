@@ -317,7 +317,7 @@ impl Sequence for ClientConnector {
                     },
                 )
             }
-            ClientConnectorState::ConnectionInitiationWaitConfirm { requested_protocol: _requested_protocol } => {
+            ClientConnectorState::ConnectionInitiationWaitConfirm { requested_protocol } => {
                 let connection_confirm = decode::<X224<nego::ConnectionConfirm>>(input)
                     .map_err(ConnectorError::decode)
                     .map(|p| p.0)?;
@@ -335,17 +335,20 @@ impl Sequence for ClientConnector {
                     }
                 };
 
-                info!(?selected_protocol, ?flags, "Server confirmed connection");
+                info!(?requested_protocol, ?selected_protocol, ?flags, "Server confirmed connection");
+                eprintln!(
+                    "[rdp] nego requested_protocol={:?} selected_protocol={:?} flags={:?}",
+                    requested_protocol, selected_protocol, flags
+                );
 
-                // NOTE: OmniTerm patch — allow the server to downgrade to standard RDP security.
-                // Some servers (e.g., xrdp with default config) select STANDARD_RDP_SECURITY
-                // regardless of what the client advertises.
-                // if !selected_protocol.intersects(requested_protocol) {
-                //     return Err(reason_err!(
-                //         "Initiation",
-                //         "client advertised {requested_protocol}, but server selected {selected_protocol}",
-                //     ));
-                // }
+                if self.config.enable_credssp
+                    && !selected_protocol.intersects(nego::SecurityProtocol::HYBRID | nego::SecurityProtocol::HYBRID_EX)
+                {
+                    return Err(reason_err!(
+                        "Initiation",
+                        "server downgraded security protocol: requested {requested_protocol:?} but selected {selected_protocol:?} without CredSSP"
+                    ));
+                }
 
                 (
                     Written::Nothing,
@@ -953,6 +956,13 @@ fn create_client_info_pdu(config: &Config, client_addr: &SocketAddr) -> rdp::Cli
                 .build(),
         },
     };
+
+    eprintln!(
+        "[rdp] client_info_pdu autologon={} username='{}' domain='{}'",
+        config.autologon,
+        client_info.credentials.username,
+        client_info.credentials.domain.as_deref().unwrap_or(""),
+    );
 
     ClientInfoPdu {
         security_header,
