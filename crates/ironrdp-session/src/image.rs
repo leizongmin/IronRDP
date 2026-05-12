@@ -143,6 +143,10 @@ fn copy_cursor_data(
 }
 
 impl DecodedImage {
+    fn rect_is_valid(rect: &InclusiveRectangle) -> bool {
+        rect.left <= rect.right && rect.top <= rect.bottom
+    }
+
     pub fn new(pixel_format: PixelFormat, width: u16, height: u16) -> Self {
         let len = usize::from(width) * usize::from(height) * usize::from(pixel_format.bytes_per_pixel());
 
@@ -202,7 +206,7 @@ impl DecodedImage {
 
     /// Returns `true` if the rectangle fits entirely within the image bounds.
     fn rect_fits(&self, rect: &InclusiveRectangle) -> bool {
-        rect.right < self.width && rect.bottom < self.height
+        Self::rect_is_valid(rect) && rect.right < self.width && rect.bottom < self.height
     }
 
     fn apply_pointer_layer(&mut self, layer: PointerLayer) -> SessionResult<Option<InclusiveRectangle>> {
@@ -441,6 +445,10 @@ impl DecodedImage {
     }
 
     fn is_pointer_redraw_required(&self, update_rectangle: &InclusiveRectangle) -> bool {
+        if !Self::rect_is_valid(update_rectangle) {
+            return false;
+        }
+
         let pointer_dest_rect = InclusiveRectangle {
             left: self.pointer_draw_x,
             top: self.pointer_draw_y,
@@ -899,5 +907,19 @@ mod tests {
         image
             .move_pointer(1199, 723)
             .expect("moving invisible pointer should not panic");
+    }
+
+    #[test]
+    fn invalid_rectangle_does_not_fit() {
+        let image = DecodedImage::new(PixelFormat::RgbA32, 1200, 724);
+        let invalid = InclusiveRectangle {
+            left: 100,
+            top: 100,
+            right: 99,
+            bottom: 100,
+        };
+
+        assert!(!DecodedImage::rect_is_valid(&invalid));
+        assert!(!image.rect_fits(&invalid));
     }
 }

@@ -217,6 +217,11 @@ impl Processor {
             trace!("{update:?}");
             buf.clear();
 
+            if update.rectangle.left > update.rectangle.right || update.rectangle.top > update.rectangle.bottom {
+                warn!(rectangle = ?update.rectangle, "Skipping invalid bitmap rectangle");
+                continue;
+            }
+
             // Bitmap data is either compressed or uncompressed, depending
             // on whether the BITMAP_COMPRESSION flag is present in the
             // flags field.
