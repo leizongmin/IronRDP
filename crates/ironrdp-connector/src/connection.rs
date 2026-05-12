@@ -336,10 +336,6 @@ impl Sequence for ClientConnector {
                 };
 
                 info!(?requested_protocol, ?selected_protocol, ?flags, "Server confirmed connection");
-                eprintln!(
-                    "[rdp] nego requested_protocol={:?} selected_protocol={:?} flags={:?}",
-                    requested_protocol, selected_protocol, flags
-                );
 
                 if self.config.enable_credssp
                     && !selected_protocol.intersects(nego::SecurityProtocol::HYBRID | nego::SecurityProtocol::HYBRID_EX)
@@ -415,12 +411,6 @@ impl Sequence for ClientConnector {
                 // OmniTerm: store server security data for standard RDP security path
                 if server_gcc_blocks.security.encryption_method != gcc::EncryptionMethod::empty() {
                     debug!(?server_gcc_blocks.security, "Server requires standard RDP security");
-                    eprintln!("[BasicSettingsExchange] encryption_method={:?} level={:?} server_random={:?} cert_len={}",
-                        server_gcc_blocks.security.encryption_method,
-                        server_gcc_blocks.security.encryption_level,
-                        server_gcc_blocks.security.server_random.is_some(),
-                        server_gcc_blocks.security.server_cert.len(),
-                    );
                     self.server_security = Some(server_gcc_blocks.security.clone());
                 }
 
@@ -511,12 +501,9 @@ impl Sequence for ClientConnector {
                 user_channel_id,
             } => {
                 debug!("RDP Security Commencement");
-                eprintln!("[RdpSecurityCommencement] server_security={:?}", self.server_security.is_some());
-
                 let mut written = Written::Nothing;
 
                 if let Some(ref sec) = self.server_security {
-                    eprintln!("[RdpSecurityCommencement] server_random={:?} cert_len={}", sec.server_random.is_some(), sec.server_cert.len());
                     if let Some(server_random) = &sec.server_random {
                         if !sec.server_cert.is_empty() {
                             // Generate 32-byte client random
@@ -525,29 +512,18 @@ impl Sequence for ClientConnector {
                             rand::rng().fill_bytes(&mut client_random);
 
                             // Parse server certificate to get RSA public key
-                            eprintln!("[RdpSec] server_cert first 40: {:02x?}", &sec.server_cert[..40.min(sec.server_cert.len())]);
                             match crate::standard_security::parse_server_cert(&sec.server_cert) {
                                 Ok((modulus, exponent)) => {
-                                    eprintln!("[RdpSec] cert OK: modulus_len={} exponent={}, modulus_first8={:02x?}",
-                                        modulus.len(), exponent, &modulus[..8.min(modulus.len())]);
                                     // Encrypt entire client random (32 bytes) with server public key
                                     match crate::standard_security::encrypt_client_random(
                                         &client_random[..], &modulus, exponent,
                                     ) {
                                         Ok(encrypted_random) => {
-                                            eprintln!("[RdpSec] client_random={:02x?}", client_random);
-                                            eprintln!("[RdpSec] server_random={:02x?}", server_random);
-                                            eprintln!("[RdpSec] encrypted_random(first16)={:02x?}", &encrypted_random[..16.min(encrypted_random.len())]);
-                                            eprintln!("[RdpSec] encrypted_random(last8)={:02x?}", &encrypted_random[encrypted_random.len().saturating_sub(8)..]);
                                             // Build and send Security Exchange PDU
                                             let sec_exchange = crate::standard_security::build_security_exchange_pdu(
                                                 &encrypted_random, user_channel_id, io_channel_id,
                                             );
                                             let pdu_len = sec_exchange.len();
-                                            eprintln!("[RdpSecurityCommencement] sec_exchange {} bytes, first 20: {:02x?}",
-                                                pdu_len, &sec_exchange[..20.min(pdu_len)]);
-                                            eprintln!("[RdpSecurityCommencement] encrypted_random len={}, modulus len={}",
-                                                encrypted_random.len(), modulus.len());
                                             output.write_slice(&sec_exchange);
                                             written = Written::from_size(pdu_len)?;
                                             debug!("Sent Security Exchange PDU ({} bytes)", pdu_len);
@@ -556,7 +532,6 @@ impl Sequence for ClientConnector {
                                             let keys = crate::standard_security::derive_keys(
                                                 server_random, &client_random, sec.encryption_method,
                                             );
-                                            eprintln!("[RdpSec] mac_key={:02x?}", keys.mac_key);
                                             // encrypt_key and decrypt_key raw bytes are logged in derive_keys()
                                             crate::legacy::set_rc4_decryptor(keys.decrypt_key);
                                             crate::legacy::set_rc4_encryptor(keys.encrypt_key);
@@ -956,13 +931,6 @@ fn create_client_info_pdu(config: &Config, client_addr: &SocketAddr) -> rdp::Cli
                 .build(),
         },
     };
-
-    eprintln!(
-        "[rdp] client_info_pdu autologon={} username='{}' domain='{}'",
-        config.autologon,
-        client_info.credentials.username,
-        client_info.credentials.domain.as_deref().unwrap_or(""),
-    );
 
     ClientInfoPdu {
         security_header,
