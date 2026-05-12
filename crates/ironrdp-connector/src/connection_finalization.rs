@@ -177,81 +177,99 @@ impl Sequence for ConnectionFinalizationSequence {
             }
 
             ConnectionFinalizationState::WaitForResponse => {
-                let ctx = legacy::decode_send_data_indication(input)?;
-                let ctx = legacy::decode_share_data(ctx)?;
-
-                debug!(message = ?ctx.pdu, "Received");
-
-                let next_state = match ctx.pdu {
-                    ShareDataPdu::Synchronize(_) => {
-                        debug!("Server Synchronize");
-                        ConnectionFinalizationState::WaitForResponse
-                    }
-                    ShareDataPdu::Control(control_pdu) => match control_pdu.action {
-                        finalization_messages::ControlAction::Cooperate => {
-                            if control_pdu.grant_id == 0 && control_pdu.control_id == 0 {
-                                debug!("Server Control (Cooperate)");
-                            } else {
-                                warn!(
-                                    control_pdu.grant_id,
-                                    control_pdu.control_id,
-                                    user_channel_id = self.user_channel_id,
-                                    "Server Control (Cooperate) has non-zero grant_id or control_id",
-                                );
+                // xrdp and some servers may send non-standard PDUs during
+                // finalization (e.g., DisconnectProviderUltimatum or early
+                // GraphicsUpdate). Treat any decode failure or unexpected PDU
+                // as finalization-complete rather than an error.
+                let next_state = match legacy::decode_send_data_indication(input)
+                    .and_then(|ctx| legacy::decode_share_data(ctx))
+                {
+                    Ok(ctx) => {
+                        debug!(message = ?ctx.pdu, "Received");
+                        match ctx.pdu {
+                            ShareDataPdu::Synchronize(_) => {
+                                debug!("Server Synchronize");
+                                ConnectionFinalizationState::WaitForResponse
                             }
-                            ConnectionFinalizationState::WaitForResponse
-                        }
-                        finalization_messages::ControlAction::GrantedControl => {
-                            debug!(
-                                control_pdu.grant_id,
-                                control_pdu.control_id,
-                                user_channel_id = self.user_channel_id,
-                                SERVER_CHANNEL_ID
-                            );
+                            ShareDataPdu::Control(control_pdu) => match control_pdu.action {
+                                finalization_messages::ControlAction::Cooperate => {
+                                    if control_pdu.grant_id == 0 && control_pdu.control_id == 0 {
+                                        debug!("Server Control (Cooperate)");
+                                    } else {
+                                        warn!(
+                                            control_pdu.grant_id,
+                                            control_pdu.control_id,
+                                            user_channel_id = self.user_channel_id,
+                                            "Server Control (Cooperate) has non-zero grant_id or control_id",
+                                        );
+                                    }
+                                    ConnectionFinalizationState::WaitForResponse
+                                }
+                                finalization_messages::ControlAction::GrantedControl => {
+                                    debug!(
+                                        control_pdu.grant_id,
+                                        control_pdu.control_id,
+                                        user_channel_id = self.user_channel_id,
+                                        SERVER_CHANNEL_ID
+                                    );
 
-                            if control_pdu.grant_id != self.user_channel_id {
-                                warn!(
-                                    "Server Control (Granted Control) had invalid grant_id, expected {}, but got {}",
-                                    self.user_channel_id, control_pdu.grant_id
-                                );
+                                    if control_pdu.grant_id != self.user_channel_id {
+                                        warn!(
+                                            "Server Control (Granted Control) had invalid grant_id, expected {}, but got {}",
+                                            self.user_channel_id, control_pdu.grant_id
+                                        );
+                                    }
+
+                                    if control_pdu.control_id != u32::from(SERVER_CHANNEL_ID) {
+                                        warn!(
+                                            "Server Control (Granted Control) had invalid control_id, expected {}, but got {}",
+                                            SERVER_CHANNEL_ID, control_pdu.control_id
+                                        );
+                                    }
+
+                                    ConnectionFinalizationState::WaitForResponse
+                                }
+                                _ => {
+                                    warn!("Unexpected control action during finalization, considering finished");
+                                    ConnectionFinalizationState::Finished
+                                }
+                            },
+                            ShareDataPdu::ServerSetErrorInfo(server_error_info::ServerSetErrorInfoPdu(error_info)) => {
+                                match error_info {
+                                    server_error_info::ErrorInfo::ProtocolIndependentCode(
+                                        server_error_info::ProtocolIndependentCode::None,
+                                    ) => ConnectionFinalizationState::WaitForResponse,
+                                    _ => {
+                                        return Err(reason_err!(
+                                            "ServerSetErrorInfo",
+                                            "server returned error info: {}",
+                                            error_info.description()
+                                        ));
+                                    }
+                                }
                             }
+                            ShareDataPdu::FontMap(_) => {
+                                // https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpbcgr/023f1e69-cfe8-4ee6-9ee0-7e759fb4e4ee
+                                //
+                                // Once the client has sent the Confirm Active PDU, it can start
+                                // sending mouse and keyboard input to the server, and upon receipt
+                                // of the Font List PDU the server can start sending graphics
+                                // output to the client.
 
-                            if control_pdu.control_id != u32::from(SERVER_CHANNEL_ID) {
-                                warn!(
-                                    "Server Control (Granted Control) had invalid control_id, expected {}, but got {}",
-                                    SERVER_CHANNEL_ID, control_pdu.control_id
-                                );
+                                ConnectionFinalizationState::Finished
                             }
-
-                            ConnectionFinalizationState::WaitForResponse
-                        }
-                        _ => return Err(general_err!("unexpected control action")),
-                    },
-                    ShareDataPdu::ServerSetErrorInfo(server_error_info::ServerSetErrorInfoPdu(error_info)) => {
-                        match error_info {
-                            server_error_info::ErrorInfo::ProtocolIndependentCode(
-                                server_error_info::ProtocolIndependentCode::None,
-                            ) => ConnectionFinalizationState::WaitForResponse,
                             _ => {
-                                return Err(reason_err!(
-                                    "ServerSetErrorInfo",
-                                    "server returned error info: {}",
-                                    error_info.description()
-                                ));
+                                warn!("Unexpected server message during finalization, considering finished");
+                                ConnectionFinalizationState::Finished
                             }
                         }
                     }
-                    ShareDataPdu::FontMap(_) => {
-                        // https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpbcgr/023f1e69-cfe8-4ee6-9ee0-7e759fb4e4ee
-                        //
-                        // Once the client has sent the Confirm Active PDU, it can start
-                        // sending mouse and keyboard input to the server, and upon receipt
-                        // of the Font List PDU the server can start sending graphics
-                        // output to the client.
-
+                    Err(e) => {
+                        // xrdp sends non-ShareData PDUs (e.g., disconnect signals)
+                        // during reactivation finalization. Treat as finished.
+                        warn!(%e, "Decode error during finalization WaitForResponse, considering finished");
                         ConnectionFinalizationState::Finished
                     }
-                    _ => return Err(general_err!("unexpected server message")),
                 };
 
                 (Written::Nothing, next_state)
