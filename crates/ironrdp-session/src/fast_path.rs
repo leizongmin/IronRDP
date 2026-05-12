@@ -51,6 +51,38 @@ pub struct Processor {
 }
 
 impl Processor {
+    fn validate_bitmap_rectangle(
+        image: &DecodedImage,
+        rectangle: &InclusiveRectangle,
+        width: u16,
+        height: u16,
+    ) -> Option<(usize, usize)> {
+        if width == 0 || height == 0 {
+            return None;
+        }
+
+        if rectangle.left > rectangle.right || rectangle.top > rectangle.bottom {
+            return None;
+        }
+
+        if rectangle.right >= image.width() || rectangle.bottom >= image.height() {
+            return None;
+        }
+
+        let rect_width = u32::from(rectangle.right) - u32::from(rectangle.left) + 1;
+        let rect_height = u32::from(rectangle.bottom) - u32::from(rectangle.top) + 1;
+
+        if rect_width == 0
+            || rect_height == 0
+            || rect_width > u32::from(width)
+            || rect_height > u32::from(height)
+        {
+            return None;
+        }
+
+        Some((rect_width as usize, rect_height as usize))
+    }
+
     pub fn update_mouse_pos(&mut self, x: u16, y: u16) {
         self.mouse_pos_update = Some((x, y));
     }
@@ -217,10 +249,19 @@ impl Processor {
             trace!("{update:?}");
             buf.clear();
 
-            if update.rectangle.left > update.rectangle.right || update.rectangle.top > update.rectangle.bottom {
-                warn!(rectangle = ?update.rectangle, "Skipping invalid bitmap rectangle");
+            let Some((rect_width, rect_height)) =
+                Self::validate_bitmap_rectangle(image, &update.rectangle, update.width, update.height)
+            else {
+                warn!(
+                    rectangle = ?update.rectangle,
+                    width = update.width,
+                    height = update.height,
+                    image_width = image.width(),
+                    image_height = image.height(),
+                    "Skipping invalid bitmap rectangle"
+                );
                 continue;
-            }
+            };
 
             // Bitmap data is either compressed or uncompressed, depending
             // on whether the BITMAP_COMPRESSION flag is present in the
@@ -234,7 +275,6 @@ impl Processor {
                     // Bitmap Compression and stored inside an RDP 6.0 Bitmap Compressed Stream
                     // structure ([MS-RDPEGDI] section 2.2.2.5.1).
                     let data_width = usize::from(update.width);
-                    let rect_width = usize::from(update.rectangle.width());
 
                     match self.bitmap_stream_decoder.decode_bitmap_stream_to_rgb24(
                         update.bitmap_data,
@@ -247,7 +287,7 @@ impl Processor {
                                 // The decoder produced data_width columns, but apply_rgb24
                                 // uses rect_width for row chunking. Re-chunk the decoded
                                 // buffer to match rect_width to avoid diagonal tearing.
-                                let height = usize::from(update.height);
+                                let height = rect_height;
                                 let src_stride = data_width * 3;
                                 let dst_stride = rect_width * 3;
                                 if src_stride > dst_stride && buf.len() == height * src_stride {
@@ -593,6 +633,63 @@ impl Processor {
         }
 
         Ok(update_rectangle.unwrap_or_else(InclusiveRectangle::empty))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ironrdp_pdu::bitmap::{BitmapData, Compression};
+    use super::*;
+
+    #[test]
+    fn validate_bitmap_rectangle_rejects_overflowing_span() {
+        let image = DecodedImage::new(PixelFormat::RgbA32, 1200, 724);
+        let rectangle = InclusiveRectangle {
+            left: 0,
+            top: 0,
+            right: u16::MAX,
+            bottom: 10,
+        };
+
+        assert!(Processor::validate_bitmap_rectangle(&image, &rectangle, 64, 11).is_none());
+    }
+
+    #[test]
+    fn process_bitmap_update_skips_overflowing_rectangle_without_panic() {
+        let mut processor = ProcessorBuilder {
+            io_channel_id: 1003,
+            user_channel_id: 1001,
+            share_id: 0x1020_3040,
+            enable_server_pointer: true,
+            pointer_software_rendering: true,
+            bulk_decompressor: None,
+        }
+        .build();
+        let mut image = DecodedImage::new(PixelFormat::RgbA32, 1200, 724);
+
+        let bitmap_update = BitmapUpdateData {
+            rectangles: vec![BitmapData {
+                rectangle: InclusiveRectangle {
+                    left: 0,
+                    top: 0,
+                    right: u16::MAX,
+                    bottom: 10,
+                },
+                width: 64,
+                height: 11,
+                bits_per_pixel: 32,
+                compression_flags: Compression::empty(),
+                compressed_data_header: None,
+                bitmap_data: &[0; 64 * 11 * 4],
+            }],
+        };
+
+        let updates = processor
+            .process_bitmap_update(&mut image, bitmap_update)
+            .expect("overflowing rectangle should be skipped");
+
+        assert_eq!(updates.len(), 1);
+        assert!(matches!(updates[0], UpdateKind::None));
     }
 }
 
