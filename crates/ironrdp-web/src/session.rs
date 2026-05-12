@@ -927,6 +927,9 @@ impl iron_remote_desktop::Session for Session {
                     ActiveStageOutput::AutoDetect(request) => {
                         debug!(?request, "Auto-detect");
                     }
+                    ActiveStageOutput::AutoDetectResponse(response) => {
+                        debug!(?response, "Auto-detect response");
+                    }
                     ActiveStageOutput::Terminate(reason) => break 'outer reason,
                 }
             }

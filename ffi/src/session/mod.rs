@@ -218,6 +218,7 @@ pub mod ffi {
                     ActiveStageOutputType::MultitransportRequest
                 }
                 ironrdp::session::ActiveStageOutput::AutoDetect { .. } => ActiveStageOutputType::AutoDetect,
+                ironrdp::session::ActiveStageOutput::AutoDetectResponse { .. } => ActiveStageOutputType::AutoDetect,
             }
         }
 

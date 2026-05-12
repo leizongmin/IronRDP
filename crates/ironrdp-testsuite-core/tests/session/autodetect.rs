@@ -162,6 +162,25 @@ fn network_characteristics_result_surfaces_as_autodetect() {
 }
 
 #[test]
+fn rtt_response_surfaces_as_autodetect_response() {
+    let mut processor = make_processor();
+    let response = AutoDetectResponse::RttResponse {
+        sequence_number: 0x4321,
+    };
+    let frame = encode_server_share_data(ShareDataPdu::AutoDetectRsp(response.clone()));
+
+    let outputs = processor.process(&frame).unwrap();
+
+    assert_eq!(outputs.len(), 1);
+    match &outputs[0] {
+        ironrdp_session::x224::ProcessorOutput::AutoDetectResponse(actual) => {
+            assert_eq!(actual, &response, "surfaced response must match the original");
+        }
+        other => panic!("expected AutoDetectResponse output, got {other:?}"),
+    }
+}
+
+#[test]
 fn bandwidth_measure_start_does_not_crash() {
     let mut processor = make_processor();
     let request = AutoDetectRequest::bw_start_connect_time(100);

@@ -41,6 +41,13 @@ pub enum ProcessorOutput {
     ///
     /// [\[MS-RDPBCGR\] 2.2.14]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpbcgr/dc672839-4f4e-40b1-a71c-cd6a959baa38
     AutoDetect(AutoDetectRequest),
+    /// Auto-detect response from server ([\[MS-RDPBCGR\] 2.2.14]).
+    ///
+    /// This is primarily used by client implementations that originate RTT
+    /// probes and need to measure the resulting round-trip time.
+    ///
+    /// [\[MS-RDPBCGR\] 2.2.14]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpbcgr/dc672839-4f4e-40b1-a71c-cd6a959baa38
+    AutoDetectResponse(AutoDetectResponse),
     /// Slow-path graphics update ([MS-RDPBCGR] 2.2.9.1.1.3).
     /// Raw update payload starting with `updateType(u16)`.
     GraphicsUpdate(Vec<u8>),
@@ -216,6 +223,10 @@ impl Processor {
                     ShareDataPdu::AutoDetectReq(_) => {
                         debug!(pdu = %ctx.pdu.as_short_name(), "Auto-detect request not yet implemented");
                         Ok(Vec::new())
+                    }
+                    ShareDataPdu::AutoDetectRsp(response) => {
+                        debug!(?response, "Received auto-detect response from server");
+                        Ok(vec![ProcessorOutput::AutoDetectResponse(response)])
                     }
                     // TODO: slow-path payloads may be bulk-compressed when
                     // ClientInfoFlags::COMPRESSION is negotiated. Decompression
