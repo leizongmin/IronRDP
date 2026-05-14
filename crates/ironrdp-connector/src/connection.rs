@@ -732,6 +732,7 @@ pub fn encode_send_data_request<T: Encode>(
     Ok(written)
 }
 
+#[allow(single_use_lifetimes)]
 fn create_gcc_blocks<'a>(
     config: &Config,
     selected_protocol: nego::SecurityProtocol,
